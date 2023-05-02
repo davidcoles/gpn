@@ -20,9 +20,11 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/tls"
 	"crypto/x509"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -65,6 +67,7 @@ type Config struct {
 	Sentry      string `json:"sentry"`
 	Healthcheck string `json:"healthcheck"`
 	LogLevel    uint8  `json:"loglevel"`
+	Signature   string `json:"signature"`
 
 	Wireguard Wireguard     `json:"wireguard"`
 	Oauth2    oauth2.Oauth2 `json:"oauth2"`
@@ -224,6 +227,8 @@ func main() {
 	handler := http.FileServer(http.FS(STATIC))
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		var sign bool
+
 		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 
 		if r.TLS == nil {
@@ -352,6 +357,9 @@ func main() {
 			w.WriteHeader(http.StatusOK)
 			w.Write(js)
 
+		case "/api/1/jws":
+			sign = true
+			fallthrough
 		case "/api/1/config":
 
 			if r.Method == "POST" {
@@ -402,8 +410,21 @@ func main() {
 				return
 			}
 
-			w.Header().Set("Content-Type", "application/json")
+			if sign {
+				jwt, err := signature(config.Signature, js)
 
+				if err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+
+				w.Header().Set("Content-Type", "application/jwt")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(jwt))
+				return
+			}
+
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			w.Write(js)
 
@@ -726,4 +747,40 @@ func loaddb(file string) (map[string]string, error) {
 	}
 
 	return m, nil
+}
+
+func signature(key string, payload []byte) (string, error) {
+	// https://curity.io/resources/learn/jwt-signatures/
+
+	if len(key) != 44 {
+		return "", errors.New("Wrong key length")
+	}
+
+	seed, err := base64.StdEncoding.DecodeString(key)
+
+	if err != nil {
+		return "", err
+	}
+
+	if len(seed) != 32 {
+		return "", errors.New("Wrong key length")
+	}
+
+	priv := ed25519.NewKeyFromSeed(seed[:])
+	pub, ok := priv.Public().(ed25519.PublicKey)
+
+	if !ok {
+		return "", errors.New("Not an ed25519 key")
+	}
+
+	x := base64.StdEncoding.EncodeToString(pub[:])
+
+	header := []byte(`{"kty":"OKP","alg":"EdDSA","crv":"Ed25519","x":"` + x + `"}`)
+	signature := ed25519.Sign(priv, payload)
+
+	return fmt.Sprintf("%s.%s.%s",
+		base64.RawURLEncoding.EncodeToString(header),
+		base64.RawURLEncoding.EncodeToString(payload),
+		base64.RawURLEncoding.EncodeToString(signature),
+	), nil
 }

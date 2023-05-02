@@ -9,6 +9,7 @@ beacon: beacon.example.com
 loglevel: 5
 sentry: https://xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@yyyyyyyyyyyyyyyyy.ingest.sentry.io/zzzzzzzzzzzzzzzz
 slack:  https://hooks.slack.com/services/XXXXXXXXX/YYYYYYYYYYY/ZZZZZZZZZZZZZZZZZZZZZZZZ
+signature: MInfHcpyCYyO9OOwB8uri1u4qp6jv69861Y11tarYks=
 
 wireguard:
   prefix: 10.123.0.0/16
