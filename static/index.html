@@ -1,0 +1,49 @@
+<!DOCTYPE HTML>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="refresh" content="3600">
+    <link rel="stylesheet" href="index.css">
+    <script>
+      window.onload = function() {
+          status();
+      }
+    </script>
+  </head>
+  <body id="body">
+
+    <div>
+      VPN <a href="/login">login</a> | <a href="/template">template</a> | <a href="/config">config</a> | <a href="/logout">logout</a> | <a href="https://www.wireguard.com/install/" target="_blank" rel="noopener noreferrer">wireguard</a>
+    </div>
+
+    <hr>
+    
+    <div id="status">Status: Initialising ...</div>
+
+    <hr>
+
+    First time use:
+    
+    <ul>
+
+      <li>Log in via SSO using the link above. The page background should go from light blue to yellow.</li>
+      <li>If you don't already have WireGuard installed, download it from the link above.</li>
+      <li>Download a WireGuard configuration file from the "config" link above.</li>
+      <li>In WireGuard use "Import Tunnel(s) from File" to load the config file you have just downloaded.</li>
+      <li>Activate the new tunnel in WireGuard - the page background should change to light green after a moment.</li>
+      <li>You should now be able to access internal systems to which you have access.</li>
+      <li>Let support know that your device has been set up so that they can do some admin.</li>
+      <li>Bookmark this page so that you can return to it for diagnostic info if your VPN doesn't seem to work.</li>
+      
+    </ul>
+    
+    <hr>
+
+    <p>
+      API: <a href="/api/1/status">status</a> | <a href="/api/1/config">config</a> | <a href="/api/1/beacon">beacon</a> 
+    </p>
+    
+  </body>
+  <script src="index.js"></script>
+</html>
+

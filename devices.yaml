@@ -1,0 +1,26 @@
+# This file should be processed with the devices.pl script:
+#   ./devices.pl devices.yaml
+# to check for unique keys/index numbers. The output is a
+# JSON file which can be loaded by the gpn daemon.
+
+---
+
+- device: M6PQYUXUI
+  number: 1
+  pubkey: ZAvojm4h9wUuBqV65RE9mk6jA7zj819MPE1SjClBGXU=
+  notes:  Alice's MacBook
+  
+- device: NVRH5PWAO
+  number: 2
+  pubkey: Jj8piJBxGEa3VBndEHFjW9PwpWzTzAQDOCb73ZfbvAY=
+  admin: Bob's Dell
+
+- device: DGUT6WK9Q
+  number: 3
+  pubkey: none
+  notes:  Eve's iPhone
+  
+- device: FDJWMYC53
+  number: 4
+  pubkey: LgadZb5u1V96pUJOO6CiuDtqn3lnI6b2FQBNuPWY1iU=
+  notes:  Mallory's BYOD Android phone

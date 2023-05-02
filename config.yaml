@@ -1,0 +1,56 @@
+---
+cacert: /etc/gpn/ca.crt
+cert: /etc/gpn/gpn.pem
+database: /var/lib/gpn.json
+devices: /etc/gpn/devices.json
+healthcheck: /etc/gpn/inservice
+address: gpn.example.com
+beacon: beacon.example.com
+loglevel: 5
+sentry: https://xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@yyyyyyyyyyyyyyyyy.ingest.sentry.io/zzzzzzzzzzzzzzzz
+slack:  https://hooks.slack.com/services/XXXXXXXXX/YYYYYYYYYYY/ZZZZZZZZZZZZZZZZZZZZZZZZ
+
+wireguard:
+  prefix: 10.123.0.0/16
+  interface: wg0
+  keepalive: 30
+  port: 51820
+  table: vpn
+  publickey: 9SnYjWTOXvB8L5rXScnOUvvSqDqxttBQdzMnWY05+i0=
+  allowedips:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+  dns:
+    - 10.1.2.53
+    - 10.3.4.53
+
+oauth2:
+  providerurl: https://login.microsoftonline.com/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/v2.0
+  clientid: 00000000-1111-2222-3333-444444444444  
+  clientsecret: xxxxxxxxxxxxxxxxxx.yyy.zzzzzzzzzzzzzzzzz
+  expirydelta: 35
+  scopes:
+    - offline_access
+
+# If match list is not empty then any roles returned from the IDP will
+# be squashed to a single value (the first matching item in the list),
+# or nothing if no matches are found.
+# eg. If the claim returns a set of [ technology london ]
+# and the match list is:
+# - london
+# - technology
+# then the role will be squashed to: london
+# Any resulting roles will have the value of prefix prepended, eg.:
+# london, technology => ROLE_london, ROLE_technology
+# Will likely replace the prefix bit with by specifying scripts
+# to add/remove firewall entries so the user can specify how they
+# are munged.
+  
+roles:
+  prefix: ROLE_
+  claim: roles
+  #match:
+  #  - london
+  #  - technology
+  #map:
+  #  london: infrastructure
