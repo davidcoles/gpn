@@ -568,8 +568,8 @@ func tlsServer(config *Config) (*http.Server, error) {
 	tlsConfig.BuildNameToCertificate()
 
 	return &http.Server{
-		ReadTimeout:  2 * time.Second,
-		WriteTimeout: 2 * time.Second,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 5 * time.Second,
 		IdleTimeout:  60 * time.Second,
 
 		Addr:      ":443",
