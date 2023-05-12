@@ -1,5 +1,9 @@
 # gpn - 'guard Private Network
 
+(More [documentation ...](docs/))
+
+## Introduction
+
 A daemon to manage WireGuard keys, firewall rules and routing table.
 
 WireGuard peers are given an x509 certificate from a certification
@@ -44,7 +48,4 @@ sending a SIGQUIT to daemon (this should probably be changed to SIGUSR2).
 You will need to create your own firewall rules - the daemon will just
 update ipsets which you should define and incorporate into your
 ruleset.
-
-
-More [documentarion](docs/)!
 
