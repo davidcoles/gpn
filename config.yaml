@@ -48,7 +48,7 @@ oauth2:
   scopes:
     - offline_access # Extra scopes to send to IDP: Azure AD requires offline_access to work
 
-# * Azure AD seems to expire (opaque binary blob) refresh tokens way earlier than the access token expiry time
+# * Azure AD seems to expire refresh tokens (opaque binary blobs) way earlier than the access token expiry time
 #   This overrides the Expiry Delta value in the (modified) Oauth2 library. Need to raise an issue to fix this
 
 
