@@ -5,13 +5,16 @@
 ### Building
 
 Currently the code makes use of Corosync's closed process groups
-functionality through CGO, do the shared library and header file need
-to be available. Installing libcpg-dev on Ubuntu 20.04 should satisfy this
+functionality through CGO, so the shared library and header files need
+to be available. Installing `libcpg-dev` on Ubuntu 20.04 should satisfy this
 requirement.
 
-Go version 1.18 is recommended (golang-1.18 on Ubuntu 20.04).
+Go version 1.18 is recommended (`golang-1.18` on Ubuntu 20.04).
 
 Once these are present then: `go build gpn.go`
+
+`libyaml-perl` and `libjson-perl` may also be needed to run Perl
+configuration scripts.
 
 ### Configuration
 
@@ -64,7 +67,7 @@ administrator via a Slack/Teams webhook (or look in the logs).
 The public key should be then added to the device inventory at the
 earliest possible opportunity and re-deployed.
 
-The <address>.conf file which the device downloaded can be imported to
+The *.conf file which the device downloaded can be imported to
 the standard WireGuard application on the device and when the tunnel
 is activated the device will be active on the VPN. The conf file
 should then be deleted as soon as possible as it contains the private key.

@@ -44,3 +44,7 @@ sending a SIGQUIT to daemon (this should probably be changed to SIGUSR2).
 You will need to create your own firewall rules - the daemon will just
 update ipsets which you should define and incorporate into your
 ruleset.
+
+
+More [documentarion](docs/)!
+
