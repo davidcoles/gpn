@@ -49,7 +49,7 @@ interface, canonical DNS address of the service, WireGuard public key,
 listen port, etc., are used to enroll devices as peers and generate
 WireGuard config files as needed.
 
-Details for the Oauth2 Identity Provider (IDP) are also required. The
+Details for the OIDC/OAuth2 Identity Provider (IDP) are also required. The
 roles for the authenticated user are used to configure firewall access
 rules. Perhaps not everyone needs this and it could be optional,
 replying solely on the WireGuard key, but it's handy to be able to
