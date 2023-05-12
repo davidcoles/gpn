@@ -3,6 +3,11 @@
 # to check for unique keys/index numbers. The output is a
 # JSON file which can be loaded by the gpn daemon.
 
+# 'number' is used to generate a unique IP address for each device
+# Given 'prefix' in config.yaml is 10.123.0.0/16:
+# number =  10: IP = 10.123.0.10
+# number = 270: IP = 10.123.1.14
+
 ---
 
 - device: M6PQYUXUI
@@ -13,7 +18,7 @@
 - device: NVRH5PWAO
   number: 2
   pubkey: Jj8piJBxGEa3VBndEHFjW9PwpWzTzAQDOCb73ZfbvAY=
-  admin: Bob's Dell
+  notes: Bob's Dell
 
 - device: DGUT6WK9Q
   number: 3

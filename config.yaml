@@ -1,38 +1,59 @@
+# Process this with config.pl to generate a JSON file to pass to daemon, eg.:
+# ./config.pl config.yaml > config.json
+# go run ./gpn.go ./config.json
+
 ---
-cacert: /etc/gpn/ca.crt
-cert: /etc/gpn/gpn.pem
-database: /var/lib/gpn.json
-devices: /etc/gpn/devices.json
-healthcheck: /etc/gpn/inservice
-address: gpn.example.com
-beacon: beacon.example.com
-loglevel: 5
-sentry: https://xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@yyyyyyyyyyyyyyyyy.ingest.sentry.io/zzzzzzzzzzzzzzzz
-slack:  https://hooks.slack.com/services/XXXXXXXXX/YYYYYYYYYYY/ZZZZZZZZZZZZZZZZZZZZZZZZ
-signature: MInfHcpyCYyO9OOwB8uri1u4qp6jv69861Y11tarYks=
+cacert: /etc/gpn/cacert.pem     # Certification Agency cert used to sign client device certificates
+cert: /etc/gpn/cert.pem         # HTTPS server certificate, chain and key
+database: /var/lib/gpn.json     # Used to store OIDC tokens between restarts
+devices: /etc/gpn/devices.json  # JSON rendering of the devices.yaml client database
+healthcheck: /etc/gpn/inservice # File that needs to be present to return a 200 on the /alive endpoint (for load-balancers)
+address: gpn.example.com        # Cannonical address of the service
+beacon: beacon.example.com      # Beacon address to verify VPN is up - should reseolve to internal VIP on the server (eg. 10.123.0.0)
+loglevel: 5                     # Logging verbosity - see syslog(3), 0-7
+
+# (optional)
+sentry: https://xxx@yyy.ingest.sentry.io/zzz          # Sentry.io endpoint to log events to (a bit of a hack for dev)
+slack:  https://hooks.slack.com/services/XXX/YYY/ZZZ  # Slack webhook for notifications (Also works with Teams)
+signature: <ed25519 private key seed - eg. wg genkey> # Private key used to sign /api/1/jws configuration response
+
+
+# Should probably get the daemon to set this up automatically - I shall add this functionality presently ...
+# Currently, a wg-quick setup is needed in (eg.) /etc/wireguard/wg0.conf:
+#  [Interface]
+#  PrivateKey = <WireGuard Private Key>
+#  ListenPort = 51820
+#  MTU = 1400
 
 wireguard:
-  prefix: 10.123.0.0/16
-  interface: wg0
-  keepalive: 30
-  port: 51820
-  table: vpn
-  publickey: 9SnYjWTOXvB8L5rXScnOUvvSqDqxttBQdzMnWY05+i0=
-  allowedips:
+  prefix: 10.123.0.0/16         # Range to use for assigning client device IP addresses
+  interface: wg0                # WireGuard interface name that devices will connect to
+  keepalive: 30                 # PersistentKeepalive for client config
+  port: 51820                   # Port to use in client config Peer Endpoint (match wg0.conf ListenPort)
+  table: vpn                    # Linux /etc/iproute2/rt_tables entry to write /32 device rutes to
+  publickey: <WireGuard pubkey> # Public key counterpart of the PrivateKey in /etc/wireguard/wg0.conf
+  allowedips:                   # AllowedIPs entry for client config Peer secion
     - 10.0.0.0/8
     - 172.16.0.0/12
-  dns:
+  dns:                          # DNS entries to be set in client config Interface section
     - 10.1.2.53
     - 10.3.4.53
 
+# OAuth2/OIDC config as per your IDP provider
 oauth2:
+  expirydelta: 35 # Number of minutes to force refresh of access tokens (*)
   providerurl: https://login.microsoftonline.com/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/v2.0
   clientid: 00000000-1111-2222-3333-444444444444  
   clientsecret: xxxxxxxxxxxxxxxxxx.yyy.zzzzzzzzzzzzzzzzz
-  expirydelta: 35
   scopes:
-    - offline_access
+    - offline_access # Extra scopes to send to IDP: Azure AD requires offline_access to work
 
+# * Azure AD seems to expire (opaque binary blob) refresh tokens way earlier than the access token expiry time
+#   This overrides the Expiry Delta value in the (modified) Oauth2 library. Need to raise an issue to fix this
+
+
+
+    
 # If match list is not empty then any roles returned from the IDP will
 # be squashed to a single value (the first matching item in the list),
 # or nothing if no matches are found.
@@ -43,6 +64,7 @@ oauth2:
 # then the role will be squashed to: london
 # Any resulting roles will have the value of prefix prepended, eg.:
 # london, technology => ROLE_london, ROLE_technology
+
 # Will likely replace the prefix bit with by specifying scripts
 # to add/remove firewall entries so the user can specify how they
 # are munged.
