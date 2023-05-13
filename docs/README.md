@@ -61,6 +61,26 @@ curtain VPN access by disabling the user at the IDP.
 
 ## Operation
 
+### Execution
+
+Run the compiled binary as: `gpn </path/to/config.json>`
+
+To reload an updated inventory file, send a SIGQUIT (should update to
+SIGUSR2) to the process.
+
+The daemon listen on port 443 for the HTTPS frontend/API, port 80 for
+redirects to HTTPS and load-balancer healthchecks, and port 8443 for
+beacon requests from the web frontend JavaScript.
+
+An internal address (eg. 10.123.0.0/16) should be set as a VIP on the
+loopback interface and the beacon DNS address in the config file set
+to resolve to this. Devices will thus only be able to reach the beacon
+address when the VPN is fully working, allowing the web interface to
+detect that everything is fully operational. Make sure that any
+firewall you set up allows for this.
+
+### Devices
+
 If no key is set yet for a device then, upon authenticating via mTLS,
 it may download a WireGuard configuration file with a dynamically
 generated private key. The server immediately forgets the private key
@@ -76,6 +96,44 @@ the standard WireGuard application on the device and when the tunnel
 is activated the device will be active on the VPN. The conf file
 should then be deleted as soon as possible as it contains the private key.
 
+When traffic is observed coming in from a device then a route to the
+devices's IP address via the WireGuard interface. If no traffic is
+observed for two minutes then the route is removed. If the device is
+active then it should be sending a persistent keepalive to prevent the
+route being withdrawn.
+
+When a route is added by the node, it alerts other nodes to this via a
+message to the cluster. Other nodes will withdraw the route if they
+currently have it, so preventing packets from being blackholed by
+stale routes. This allows devices to be redirected to different node
+by a load-balancer with the minimum amount of disruption.
+
+### Cluster
+
+Currently gpn uses the Corosync cluster engine. This will need to be
+configured separately to gpn. Other nodes can be discoverable via
+multicast or listed explicitly with unicast udp. No other cluster
+config for gpn is required; it communicates with Corosync over a unix
+domain socket and learns about other nodes from the cluster engine.
+
+In addition to pruning stale routes from nodes, cluster communication
+is used to distribute access tokens for logged in users. One node, the
+cluster leader, works to keep tokens updated as necessary and
+communicates refreshed tokens to the cluster.
+
+When the device inventory is loaded by a node it is sent out to the
+cluster. When receiving the update, each node checks the serial number
+of the inventory, and if greater than the one it currently holds then the
+inventory is updated locally. This allows the cluster to have a single
+consistent view of the inventory.
+
+When a node joins the cluster, all nodes send out their current
+inventory and acces tokens, so the newly joined node quicky comes up
+to date.
+
+### Network
+
+### Firewall
 
 ## Further development
 
