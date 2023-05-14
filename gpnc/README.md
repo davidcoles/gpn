@@ -31,8 +31,8 @@ Needs the wireguard-tools/wireguard-go packages from Homebrew.
 
 Two processes need to be run.
 
-* A WireGuard management process (needs root) - sudo ./gpnc -w
-* A menu bar based client process - ./gpnc
+* A WireGuard management process (needs root) - `sudo ./gpnc -w`
+* A menu bar based client process - `./gpnc`
 
 The client process will search the keychain for a matching client
 certificate (can be overridden with a PEM file on the command line: `./gpnc <path/to/cert.pem>`)
