@@ -133,7 +133,38 @@ to date.
 
 ### Network
 
+In the simplest case, the VPN could be hosted on a single server, with
+HTTP/HTTPS and WireGuard ports forwarded and an iptables MASQUERADE
+rule to NAT all devices to appear to be the address of the server.
+
+Allocating a subnet within your address space and adding a static
+route to the server, or running a routing protocol on the server to
+advertise the prefix to your routers would avoid the need for NAT.
+
+You could run a cluster of servers, load-balance the incoming
+HTTP(S)/WireGuard connections, run a mesh network of tunnels between
+the servers and advertise the subnet prefix or individual /32
+addresses to your network.
+
+If it's easier to host a cluster in the cloud (load-balancers and VMs
+are easily defined by infrastructure-as-code tools) then a couple of
+point-of-presence servers inside your infrastructure could open
+outgoing WireGuard tunnels to the cloudy VMs and run an eBGP setup to
+make the VPN subnet accessible.
+
+All of this is beyond the scope of the this software, of course. gpn
+will put routes for your devices into the routing table (probably good
+to use a alternate table, specified in the config file) and you can
+advertise these with a routing daemon of your choice (I use BIRD).
+
 ### Firewall
+
+gpn makes no assumptions about the state of your firewall. If you
+define DNS servers in the client configuration which are inside your
+network then you should make sure that these are reachable without the
+user being logged in. When a user logs in, the claims in the token can
+be used to the user's IP to an ipset(1), or sets, reflecting the user's
+roles.
 
 ## Further development
 
