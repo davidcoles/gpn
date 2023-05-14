@@ -35,9 +35,8 @@ would be nice to have a tailored client which can query the
 automatic configuration of the VPN client, notification to the user of
 OIDC authentication state, etc.
 
-A truly awful proof-of-concept for macOS can be found at:
-
-https://github.com/davidcoles/wgvpn
+A truly awful proof-of-concept for macOS can be found in the
+[gpnc/](gpnc/) directory.
 
 Currently the devices database is stored as a YAML file and converted
 to JSON, but this could be generated from a database, stored in LDAP,
