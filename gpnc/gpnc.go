@@ -48,7 +48,7 @@ import (
 )
 
 const DIRECTORY = "/var/run/wireguard/"
-const SOCKET = DIRECTORY + "wgvpn"
+const SOCKET = DIRECTORY + "gpnc"
 const BASEURL = "http://localhost/"
 
 var ROOTCA = "MyCA"
@@ -1157,7 +1157,7 @@ func setconf(wg WireGuard) string {
 
 func wireguard(quit chan bool) (string, chan bool) {
 
-	name := DIRECTORY + "/wgvpn.name"
+	name := DIRECTORY + "/gpnc.name"
 	done := make(chan bool)
 
 	go func() {
