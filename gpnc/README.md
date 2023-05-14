@@ -1,4 +1,4 @@
-# WGVPN
+# gpnc
 
 A proof-of-concept macOS client for a simple managed WireGuard VPN service
 
