@@ -1,0 +1,94 @@
+---
+
+roles:
+
+  - role: admin
+    acls:
+      - everything
+
+  - role: sales
+    acls:
+      - common
+      - erp
+
+  - role: hr
+    acls:
+      - common
+      - erp
+      - payroll
+        
+  - role: developers
+    acls:
+      - common
+      - dev
+
+  - role: sysadmins
+    acls:
+      - common
+      - dev
+      - staging
+      - production
+      
+  - role: contractor
+    acls:
+      - dev
+      
+      
+access-lists:
+
+  ALL: # special entry - applies even when user is not logged in
+    - permit udp any object-group DNS eq domain
+    - permit tcp any object-group DNS eq domain
+
+  everything:
+    - permit ip any any
+
+  common:
+    - permit tcp any host 10.10.10.10 eq 25 110 143 # email server
+    - permit tcp any host 10.10.10.20 eq 80 443     # redmine server    
+    
+  erp:
+    - permit tcp any object-group ERP eq www 443
+
+  payroll:
+    - permit tcp any object-group PAYROLL eq www 443
+    
+  dev:
+    - permit tcp any host 10.1.23.0/24 eq www 443 22 # dev servers
+    - permit tcp any host 10.2.34.0/24 eq www 443 22 # test servers
+    
+  ops:
+    - permit tcp any object-group JENKINS    eq www 443
+    - permit tcp any object-group STAGING    eq www 443 22    
+    - permit tcp any object-group PRODUCTION eq www 443 22
+
+object-groups:
+
+  RFC1819:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+
+  DNS:
+    - 10.100.1.53 # DNS primary
+    - 10.200.1.53 # DNS secondary
+    
+  ERP:
+    - 10.8.9.10 # SAP-1
+    - 10.8.9.11 # SAP-2     
+
+  PAYROLL:
+    - 10.11.12.13 # Main server
+    - 10.11.12.14 # Backup
+    - 10.11.12.15 # CEO's secret slush funds
+
+  JENKINS:
+    - 10.3.4.5 # Jenkins
+
+  STAGING:
+    - 10.9.8.0/24
+    - 10.8.7.0/24
+
+  PRODUCTION:
+    - 10.4.123.0/24 # Colo A
+    - 10.5.123.0/24 # Colo B

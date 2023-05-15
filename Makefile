@@ -9,10 +9,10 @@ clean:
 
 #yq -o json $< >$@- && mv $@- $@
 config.json: config.yaml
-	./config.pl $< >$@- && mv $@- $@
+	tools/config.pl $< >$@- && mv $@- $@
 
 devices.json: devices.yaml
-	./devices.pl devices.yaml >$@- && mv $@- $@
+	tools/devices.pl devices.yaml >$@- && mv $@- $@
 
 
 # sudo apt install libyaml-perl libjson-perl golang-1.18

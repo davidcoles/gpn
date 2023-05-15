@@ -30,7 +30,7 @@ A number of supporting configuration files are needed:
 #### Devices 
 
 A simple YAML file (example [devices.yaml](../devices.yaml)) can be
-processed by the [devices.pl](../devices.pl) script to generate a JSON
+processed by the [devices.pl](../tools/devices.pl) script to generate a JSON
 inventory of authorised devices.
 
 Each device needs a unique non-zero integer which is used to determine
@@ -44,7 +44,7 @@ Also see [here](#further-development)
 ### Main configuration file
 
 A YAML file (example [config.yaml](../config.yaml)) is processed by
-[config.pl](../config.pl) to produce a JSON file which can be read by
+[config.pl](../tools/config.pl) to produce a JSON file which can be read by
 the daemon.
 
 Various parameters including the location of the device inventory and
@@ -165,6 +165,18 @@ network then you should make sure that these are reachable without the
 user being logged in. When a user logs in, the claims in the token can
 be used to the user's IP to an ipset(1), or sets, reflecting the user's
 roles.
+
+A sample script is included for generating a firewall rules shell
+script - [firewall.pl](../tools/firewall.pl) - from a YAML config
+containing Cisco-like access control lists
+([firewall.yaml](../tools/firewall.yaml)).
+
+If the prefix you are using for your VPN subnet is 10.45.0.0/16 then
+you would run it like so:
+
+`./firewall.pl -p 10.45 firewall.yaml >firewall.sh`
+
+This will set up ipsets for users in various roles.
 
 ## Further development
 
