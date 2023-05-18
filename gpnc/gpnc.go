@@ -97,17 +97,15 @@ type Peer struct {
 	Endpoint   string
 }
 
-var wg = flag.Bool("w", false, "manage wireguard device")
-
-// var cm = flag.Bool("c", false, "client mode")
-var cm bool = true
+var manage = flag.Bool("w", false, "manage wireguard device")
+var monitor = flag.Bool("m", false, "monitor connection only (use wireguard app to connect)")
 
 func main() {
 
 	flag.Parse()
 	args := flag.Args()
 
-	if *wg {
+	if *manage {
 		wgtool()
 		return
 	}
@@ -120,14 +118,14 @@ func main() {
 		},
 	}
 
-	go start(cm, args)
+	go start(*monitor, args)
 
 	menuet.App().Name = NAME
 	menuet.App().Label = "VPN"
 	menuet.App().RunApplication()
 }
 
-func start(cm bool, args []string) {
+func start(monitor bool, args []string) {
 
 	var client *http.Client
 	var account string
@@ -147,10 +145,10 @@ func start(cm bool, args []string) {
 		log.Fatal(err)
 	}
 
-	if cm {
-		getkey(client, account)
-	} else {
+	if monitor {
 		frontend(client, "", Private{}, false)
+	} else {
+		getkey(client, account)
 	}
 }
 

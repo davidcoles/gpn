@@ -33,6 +33,7 @@ Two processes need to be run.
 
 * A WireGuard management process (needs root) - `sudo ./gpnc -w`
 * A menu bar based client process - `./gpnc`
+* Alternately if you want to use the regular WireGuard app for establishing the VPN then you can run `./gpnc -m` to monitor it in the menu bar.
 
 The client process will search the keychain for a matching client
 certificate (can be overridden with a PEM file on the command line: `./gpnc <path/to/cert.pem>`)
