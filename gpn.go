@@ -57,17 +57,18 @@ var Logger *logger.Logger
 const FACILITY = "main"
 
 type Config struct {
-	CACert      string `json:"cacert"`
-	Cert        string `json:"cert"`
-	Address     string `json:"address"`
-	Beacon      string `json:"beacon"`
-	Devices     string `json:"devices"`
-	Database    string `json:"database"`
-	Slack       string `json:"slack"`
-	Sentry      string `json:"sentry"`
-	Healthcheck string `json:"healthcheck"`
-	LogLevel    uint8  `json:"loglevel"`
-	Signature   string `json:"signature"`
+	CACert      string   `json:"cacert"`
+	CACerts     []string `json:"cacerts"`
+	Cert        string   `json:"cert"`
+	Address     string   `json:"address"`
+	Beacon      string   `json:"beacon"`
+	Devices     string   `json:"devices"`
+	Database    string   `json:"database"`
+	Slack       string   `json:"slack"`
+	Sentry      string   `json:"sentry"`
+	Healthcheck string   `json:"healthcheck"`
+	LogLevel    uint8    `json:"loglevel"`
+	Signature   string   `json:"signature"`
 
 	Wireguard Wireguard     `json:"wireguard"`
 	Oauth2    oauth2.Oauth2 `json:"oauth2"`
@@ -129,6 +130,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	return
 
 	if config.Oauth2.Address == "" {
 		config.Oauth2.Address = config.Address
@@ -523,15 +526,28 @@ func loadConfig(file string) (Config, error) {
 }
 
 func tlsServer(config *Config) (*http.Server, error) {
-	// LOAD TLS CONFIG
-	caCert, err := ioutil.ReadFile(config.CACert)
-
-	if err != nil {
-		return nil, err
-	}
 
 	caCertPool := x509.NewCertPool()
-	caCertPool.AppendCertsFromPEM(caCert)
+
+	if config.CACert != "" {
+		caCert, err := ioutil.ReadFile(config.CACert)
+
+		if err != nil {
+			return nil, err
+		}
+
+		caCertPool.AppendCertsFromPEM(caCert)
+	}
+
+	for _, f := range config.CACerts {
+		caCert, err := ioutil.ReadFile(f)
+
+		if err != nil {
+			return nil, err
+		}
+
+		caCertPool.AppendCertsFromPEM(caCert)
+	}
 
 	tlsConfig := &tls.Config{
 		ClientCAs:  caCertPool,
