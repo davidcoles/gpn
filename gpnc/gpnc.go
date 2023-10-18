@@ -99,6 +99,7 @@ type Peer struct {
 
 var manage = flag.Bool("w", false, "manage wireguard device")
 var monitor = flag.Bool("m", false, "monitor connection only (use wireguard app to connect)")
+var fallback = flag.String("p", "", "private key")
 
 func main() {
 
@@ -118,14 +119,14 @@ func main() {
 		},
 	}
 
-	go start(*monitor, args)
+	go start(*monitor, *fallback, args)
 
 	menuet.App().Name = NAME
 	menuet.App().Label = "VPN"
 	menuet.App().RunApplication()
 }
 
-func start(monitor bool, args []string) {
+func start(monitor bool, fallback string, args []string) {
 
 	var client *http.Client
 	var account string
@@ -148,16 +149,20 @@ func start(monitor bool, args []string) {
 	if monitor {
 		frontend(client, "", Private{}, false)
 	} else {
-		getkey(client, account)
+		getkey(client, account, fallback)
 	}
 }
 
-func getkey(client *http.Client, account string) {
+func getkey(client *http.Client, account string, fallback string) {
 
 	keypeer, err := retrievekey(SERVICE, account)
 
 	if err != nil {
 		k, err := genkey()
+
+		if fallback != "" {
+			k, err = decode_(fallback)
+		}
 
 		if err != nil {
 			alert := menuet.Alert{Buttons: []string{"OK"}}
@@ -247,6 +252,7 @@ func getkey(client *http.Client, account string) {
 	pub := encode(pubkey(key))
 
 	fmt.Println("PUBKEY", pub)
+	fmt.Println("SERVER", peer)
 
 	frontend(client, peer, key, true)
 }
@@ -764,6 +770,24 @@ func decode(s string) (key [32]byte, b bool) {
 		b = true
 	}
 	return
+}
+
+func decode_(s string) ([32]byte, error) {
+	var key [32]byte
+
+	k, err := base64.StdEncoding.DecodeString(s)
+
+	if err != nil {
+		return key, err
+	}
+
+	if len(k) != 32 {
+		return key, errors.New("Incorrect key length")
+	}
+
+	copy(key[:], k[:])
+
+	return key, nil
 }
 
 func _getconfig(client *http.Client, url string, pub string) *WireGuard {
