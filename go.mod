@@ -2,6 +2,7 @@ module gpn
 
 go 1.18
 
+//require golang.org/x/net v0.17.0
 require (
 	github.com/coreos/go-oidc/v3 v3.6.0
 	github.com/davidcoles/cpg v0.1.1
@@ -13,7 +14,7 @@ require (
 require (
 	github.com/go-jose/go-jose/v3 v3.0.0 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
-	golang.org/x/net v0.10.0 // indirect
+	golang.org/x/net v0.17.0 // indirect
 	golang.org/x/oauth2 v0.6.0 // indirect
 	golang.org/x/sys v0.13.0 // indirect
 	golang.org/x/text v0.13.0 // indirect
