@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	//"log"
+	"io"
 	"os"
 	"os/exec"
 	"time"
@@ -370,7 +371,7 @@ func NewDeviceManager(m chan *message, c *cluster.Cluster, a *oauth2.Auth, wg, t
 	return dm
 }
 
-func Init(file string, auth *oauth2.Auth, wg, table string, persist chan Persist, prefix [2]byte) (*DeviceManager, error) {
+func Init(file string, auth *oauth2.Auth, wg, table string, persist chan Persist, prefix [2]byte, command []string) (*DeviceManager, error) {
 	messages := make(chan *message)
 
 	deliver := func(c *cluster.Cluster, j []byte, me bool) {
@@ -418,9 +419,64 @@ func Init(file string, auth *oauth2.Auth, wg, table string, persist chan Persist
 
 	dm := NewDeviceManager(messages, c, auth, wg, table, persist, prefix)
 
-	dm.LoadDevices(file)
+	//dm.LoadDevices(file)
+
+	go func() {
+
+		for {
+
+			d, stderr := dev_command(command)
+
+			if d != nil {
+
+				fmt.Print("dev_command")
+
+				dm.devices <- *d
+
+			} else {
+				fmt.Print(stderr)
+			}
+
+			time.Sleep(1 * time.Minute)
+		}
+	}()
 
 	return dm, nil
+}
+
+func dev_command(c []string) (*Devices, string) {
+
+	cmd := exec.Command(c[0], c[1:]...)
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Sprint(err)
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Sprint(err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Sprint(err)
+	}
+
+	sout, _ := io.ReadAll(stdout)
+	serr, _ := io.ReadAll(stderr)
+
+	if err := cmd.Wait(); err != nil {
+		return nil, fmt.Sprint(err)
+	}
+
+	var d Devices
+
+	err = json.Unmarshal(sout, &d)
+	if err != nil {
+		return nil, string(serr)
+	}
+
+	return &d, string(serr)
 }
 
 func (dm *DeviceManager) send(m *message) {
@@ -513,7 +569,7 @@ func diff(current, old []string) ([]string, []string) {
 }
 
 func ipset(id, ip string, add []string, del []string) {
-	timeout := "300"
+	//timeout := "300"
 
 	if ip != "" {
 
@@ -527,7 +583,8 @@ func ipset(id, ip string, add []string, del []string) {
 		}
 
 		for _, role := range add {
-			_, err := exec.Command("ipset", "-exist", "add", role, ip, "timeout", timeout).Output()
+			//_, err := exec.Command("ipset", "-exist", "add", role, ip, "timeout", timeout).Output()
+			_, err := exec.Command("ipset", "-exist", "add", role, ip).Output()
 			if err != nil {
 				ok = false
 			}

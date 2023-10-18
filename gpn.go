@@ -69,6 +69,7 @@ type Config struct {
 	Healthcheck string   `json:"healthcheck"`
 	LogLevel    uint8    `json:"loglevel"`
 	Signature   string   `json:"signature"`
+	Command     []string `json:"command"`
 
 	Wireguard Wireguard     `json:"wireguard"`
 	Oauth2    oauth2.Oauth2 `json:"oauth2"`
@@ -131,8 +132,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	return
-
 	if config.Oauth2.Address == "" {
 		config.Oauth2.Address = config.Address
 	}
@@ -177,7 +176,7 @@ func main() {
 
 	persist := tokens(config.Database)
 
-	dm, err := devices.Init(config.Devices, auth, config.Wireguard.Interface, config.Wireguard.Table, persist, prefix)
+	dm, err := devices.Init(config.Devices, auth, config.Wireguard.Interface, config.Wireguard.Table, persist, prefix, config.Command)
 
 	if err != nil {
 		log.Fatal(err, dm)

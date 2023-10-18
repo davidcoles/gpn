@@ -3,6 +3,7 @@ package cluster
 import (
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/davidcoles/cpg"
 )
@@ -105,7 +106,10 @@ func New(group string, deliver func(*Cluster, []byte, bool), changed func(*Clust
 		return nil, errors.New(fmt.Sprint(err))
 	}
 
-	go cpg.Dispatch(h, cpg.CS_DISPATCH_BLOCKING)
+	go func() {
+		cpg.Dispatch(h, cpg.CS_DISPATCH_BLOCKING)
+		log.Fatal("CS_DISPATCH_BLOCKING exited")
+	}()
 
 	return c, nil
 }
