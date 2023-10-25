@@ -1,45 +1,37 @@
 # gpnc
 
-A proof-of-concept macOS client for a simple managed WireGuard VPN service
-
-## Introduction
-
-The server implementation provides a simple API for clients to
-discover VPN configuration data. Each client uses a TLS client
-certificate to access the API and, based on the CommonName presented,
-the server can select and activate respective IP address/public key
-bindings on the WireGuard server.
-
-An endpoint can be used to send the end user to an OIDC authentication
-flow (possibly using 2FA) which, when passed, will add the device's IP
-address to firewall rules. Tokens tracked by the server may be
-periodically refreshed to keep the client active - failure to receive
-a refreshed token, or client certificate invalidation via OSCP can
-block access to the client.
+A proof-of-concept macOS client for the gpn VPN service
 
 # Compilation
 
 When building, you should specify your gpn end-point, name of your CA
-(so your client certificate can be found in your keychain) and a name
-to use to display in the menu bar. Eg.:
+(so that the client certificate can be found in your keychain) and a
+name to use to display in the menu bar. Eg.:
 
   `make ROOTCA=MyCorpCA NAME=MyCorpVPN DOMAIN=vpn.mycorpdomain.com`
 
 ## Usage
 
-Needs the wireguard-tools/wireguard-go packages from Homebrew.
+Needs the wireguard-tools/wireguard-go packages from Homebrew:
+
+* `brew install wireguard-go wireguard-tools`
 
 Two processes need to be run.
 
-* A WireGuard management process (needs root) - `sudo ./gpnc -w`
-* A menu bar based client process - `./gpnc`
+* A WireGuard management process (needs root): `sudo ./gpnc -w`
+* A menu bar based client process: `./gpnc`
 * Alternately if you want to use the regular WireGuard app for establishing the VPN then you can run `./gpnc -m` to monitor it in the menu bar.
 
-The client process will search the keychain for a matching client
-certificate (can be overridden with a PEM file on the command line: `./gpnc <path/to/cert.pem>`)
-and create a keychain password entry with a generated private key and
-server public key if it does not exist. It will then poll the server
-for status information.
+You will need a TLS client certificate in your keychain (or specify a
+PEM format certificate file with the -c flag) and grant access to the
+application when prompted. On first run a private key will be
+generated and stored along with the servers public key in a keychain
+entry.
+
+If the management process exist unexpectedly it might leave the DNS
+resolvers in place. They can be cleared with:
+
+* `networksetup -setdnsservers Wi-Fi empty`
 
 ## API endpoints
 
@@ -47,10 +39,17 @@ for status information.
 
 Returns key:value pairs indicating the status of the user's
 connection. Can be used to indicate that the user may need to
-authenticate via, eg., an OIDC flow.
+authenticate via, eg., an OIDC flow, and verify that the correct
+public key is present on the server
 
 ```
-{"active":true}
+{
+ "public_key":"BxMyWn+hWL8mP84SkMtuoThd+CCQduwzzkN8RcTgfj0=",
+ "authenticated":true,
+ "user":"user@example.com",
+ "ipv4_address":"10.1.2.3",
+ "device":"ONWYKHOKYED1"
+}
 ```
 
 ### /api/1/beacon
@@ -121,3 +120,9 @@ A native client would need/implement:
 * Generate private key on first use and save along with server public key
 * Check server key against stored entry when connecting - alert user of mismatch
 * Post pubkey when connecting to generate notification server side in case of mismatch
+
+## NOTES
+
+https://developer.apple.com/documentation/networkextension/nednssettings
+https://developer.apple.com/documentation/networkextension/netunnelnetworksettings
+https://stackoverflow.com/questions/5677810/how-to-connect-with-client-certificate-using-a-webview-in-cocoa

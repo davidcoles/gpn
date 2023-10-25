@@ -19,6 +19,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -34,8 +35,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,33 +48,103 @@ import (
 
 const DIRECTORY = "/var/run/wireguard/"
 const SOCKET = DIRECTORY + "gpnc"
-const BASEURL = "http://localhost/"
+const VPNURL = "http://localhost/up"
 
 var ROOTCA = "MyCA"
 var NAME = "MyVPN"
 var DOMAIN = "vpn.example.com"
-var SERVICE = DOMAIN
-var PORTAL = "https://" + DOMAIN + "/"
 var ACTIVE = "login"
 var CONFIG = "api/1/config"
 var BEACON = "api/1/beacon"
 var STATUS = "api/1/status"
 
-var CLIENT *http.Client
-
-type Private [32]byte
+var CLIENT = &http.Client{
+	Transport: &http.Transport{
+		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+			return net.Dial("unix", SOCKET)
+		},
+	},
+}
 
 const (
-	I_INITIALISING = "💤"
-	I_CONNECTING   = "🔄"
-	I_ESTABLISHED  = "✅"
-	I_DOWN         = "⛔️"
-	I_WARNING      = "⚠️"
-	I_BLOCKED      = "🚫"
-	I_BROKEN       = "❌"
-	I_UNREACHABLE  = "🆘"
-	I_WTF          = "⁉️"
+	I_SLEEPING   = "💤"
+	I_TICK       = "✅"
+	I_DOWN_ARROW = "⬇️"
+	I_WARNING    = "⚠️"
+	I_PROHIBITED = "🚫"
+	I_PASSPORT   = "🛂"
+	I_CROSS_MARK = "❌"
+	I_SOS        = "🆘"
+	I_WTF        = "⁉️"
+	I_NO_ENTRY   = "⛔️"
 )
+
+var monitor = flag.Bool("m", false, "monitor vpn status (for use with woreguard app)")
+var manage = flag.Bool("w", false, "manage wireguard device (to be run with sudo)")
+var name = flag.String("n", NAME, "app name")
+var rootca = flag.String("r", ROOTCA, "cn of the root ca so search for")
+var domain = flag.String("d", DOMAIN, "domain name")
+var certfile = flag.String("c", "", "client certfile pem file")
+var fallback = flag.String("f", "", "fallback private key")
+
+func main() {
+
+	flag.Parse()
+
+	if *manage {
+		wgtool()
+		return
+	}
+
+	if *monitor {
+		go app2(*name, *domain, *rootca, *certfile)
+	} else {
+		go app(*name, *domain, *rootca, *certfile)
+	}
+
+	menuet.App().Name = *name
+	menuet.App().Label = *domain
+	menuet.App().RunApplication()
+}
+
+type Private [32]byte
+type Public [32]byte
+
+func (p *Private) Decode(s string) error {
+	k, err := base64.StdEncoding.DecodeString(s)
+
+	if err != nil {
+		return err
+	}
+
+	if len(k) != 32 {
+		return errors.New("Incorrect key length")
+	}
+
+	copy((*p)[:], k[:])
+	return nil
+}
+
+func (p *Private) Public() (public Public) {
+
+	pub, err := curve25519.X25519(p[:], curve25519.Basepoint)
+
+	if err != nil || len(pub) != 32 {
+		panic("curve25519.X25519: " + err.Error())
+	}
+
+	copy(public[:], pub[:])
+
+	return
+}
+
+func (p Private) Encode() string {
+	return base64.StdEncoding.EncodeToString(p[:])
+}
+
+func (p Public) Encode() string {
+	return base64.StdEncoding.EncodeToString(p[:])
+}
 
 type WireGuard struct {
 	Interface Interface
@@ -83,7 +152,6 @@ type WireGuard struct {
 }
 
 type Interface struct {
-	//PrivateKey string
 	PrivateKey Private
 	PublicKey  string
 	Address    string
@@ -97,164 +165,714 @@ type Peer struct {
 	Endpoint   string
 }
 
-var manage = flag.Bool("w", false, "manage wireguard device")
-var monitor = flag.Bool("m", false, "monitor connection only (use wireguard app to connect)")
-var fallback = flag.String("p", "", "private key")
-
-func main() {
-
-	flag.Parse()
-	args := flag.Args()
-
-	if *manage {
-		wgtool()
-		return
-	}
-
-	CLIENT = &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-				return net.Dial("unix", SOCKET)
-			},
-		},
-	}
-
-	go start(*monitor, *fallback, args)
-
-	menuet.App().Name = NAME
-	menuet.App().Label = "VPN"
-	menuet.App().RunApplication()
+type APIClient struct {
+	C       chan bool
+	client  *http.Client
+	name    string
+	account string
+	domain  string
+	auth    bool
+	conn    bool
+	state   uint8
 }
 
-func start(monitor bool, fallback string, args []string) {
+func (a *APIClient) event() {
+	select {
+	case a.C <- true:
+	default:
+	}
+}
 
-	var client *http.Client
+const (
+	V_UNREACHABLE = iota
+	V_NOT_AUTHENTICATED
+	V_AUTHENTICATED
+	V_REACHABLE
+)
+
+func (a *APIClient) bg() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		var state uint8 = V_UNREACHABLE
+
+		var err error
+
+		a.auth, err = a.status()
+
+		fmt.Println(">>>", a.auth, err)
+
+		if err == nil {
+
+			if a.auth {
+				state = V_AUTHENTICATED
+
+				a.conn, err = a.beacon()
+
+				if err == nil {
+					state = V_REACHABLE
+				}
+			} else {
+				state = V_NOT_AUTHENTICATED
+			}
+		}
+
+		a.state = state
+
+		a.event()
+
+		select {
+		case <-ticker.C:
+		}
+	}
+}
+func APIClientFromFile(name, domain, file string) (*APIClient, error) {
+
 	var account string
-	var err error
 
-	if len(args) > 0 {
-		client, account, err = cert(args[0])
-	} else {
-		client, account, err = getclient(ROOTCA)
-	}
-
-	if err != nil || client == nil {
-		alert := menuet.Alert{Buttons: []string{"OK"}}
-		alert.MessageText = "No client certificate found"
-		alert.InformativeText = "Ensure that a certificate from the " + ROOTCA + " certificate authority is in your keystore"
-		menuet.App().Alert(alert)
-		log.Fatal(err)
-	}
-
-	if monitor {
-		frontend(client, "", Private{}, false)
-	} else {
-		getkey(client, account, fallback)
-	}
-}
-
-func getkey(client *http.Client, account string, fallback string) {
-
-	keypeer, err := retrievekey(SERVICE, account)
+	certificate, err := tls.LoadX509KeyPair(file, file)
 
 	if err != nil {
-		k, err := genkey()
+		return nil, err
+	}
 
-		if fallback != "" {
-			k, err = decode_(fallback)
-		}
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{certificate},
+	}
 
-		if err != nil {
-			alert := menuet.Alert{Buttons: []string{"OK"}}
-			alert.MessageText = "Unable to generate encryption key"
-			alert.InformativeText = fmt.Sprint("Error:", err)
-			menuet.App().Alert(alert)
-			log.Fatal(err)
-		}
+	tlsConfig.BuildNameToCertificate()
 
-		key := encode(k)
-		pub := encode(pubkey(k))
+	for k, _ := range tlsConfig.NameToCertificate {
+		account = k
+	}
 
-		wg := getconfig(client, PORTAL+CONFIG, pub)
+	if account == "" {
+		return nil, errors.New("No account name")
+	}
 
-		if wg == nil {
-			alert := menuet.Alert{Buttons: []string{"OK"}}
-			alert.MessageText = "Connection failed"
-			alert.InformativeText = "Couldn't retrieve config from server"
-			menuet.App().Alert(alert)
-			log.Fatal("Connection failed")
-		}
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig:     tlsConfig,
+			TLSHandshakeTimeout: 4 * time.Second,
+		},
+		Timeout: 6 * time.Second,
+	}
 
-		peer := wg.Peer.PublicKey
+	a := &APIClient{client: client, name: name, account: account, domain: domain, C: make(chan bool)}
+	go a.bg()
+	return a, nil
+}
 
-		_, ok := decode(peer)
+func APIClientFromKeychain(name, domain, rootca string) (*APIClient, error) {
 
-		if !ok {
-			alert := menuet.Alert{Buttons: []string{"OK"}}
-			alert.MessageText = "Connection failed"
-			alert.InformativeText = "Couldn't retrieve public key from server"
-			menuet.App().Alert(alert)
-			log.Fatal("wg.Peer.PublicKey")
-		}
+	client, account, err := getclient(rootca)
 
-		keypeer = key + ":" + peer
+	if err != nil {
+		return nil, err
+	}
 
-		err = storekey(SERVICE, account, keypeer)
+	a := &APIClient{client: client, name: name, account: account, domain: domain, C: make(chan bool)}
+	go a.bg()
+	return a, nil
+}
 
-		if err != nil {
-			alert := menuet.Alert{Buttons: []string{"OK"}}
-			alert.MessageText = "Unable to store encryption key"
-			alert.InformativeText = fmt.Sprint("Error:", err)
-			menuet.App().Alert(alert)
-			log.Fatal(err)
-		}
+func (a *APIClient) StoreKeys(key Private, peer string) error {
 
-		alert := menuet.Alert{Buttons: []string{"OK"}}
-		alert.MessageText = "New key generated"
-		alert.InformativeText = "A new " + SERVICE + " key for device " + account + " was generated and stored in your keychain"
-		menuet.App().Alert(alert)
+	return storekey(a.name+": "+a.domain, a.account, key.Encode()+":"+peer)
+}
 
-		getconfig(client, PORTAL+CONFIG, pub)
+func (f *APIClient) RetrieveKeys() (Private, string, error) {
+	var pri Private
+
+	keypeer, err := keyring.Get(f.name+": "+f.domain, f.account)
+
+	if err != nil {
+		return pri, "", err
+	}
+
+	if err != nil {
+		return pri, "", err
 	}
 
 	kp := strings.Split(keypeer, ":")
 
 	if len(kp) != 2 {
-		menuet.App().Alert(menuet.Alert{
-			Buttons:         []string{"OK"},
-			MessageText:     "Mangled keys",
-			InformativeText: "Mangled keys",
+		return pri, "", errors.New("Bad keychain entry")
+	}
+
+	err = pri.Decode(kp[0])
+
+	if err != nil {
+		return pri, "", err
+	}
+
+	return pri, kp[1], nil
+}
+
+func (f *APIClient) Upload(key Public) (*WireGuard, error) {
+
+	url := "https://" + f.domain + "/" + CONFIG
+
+	type message struct{ PublicKey string }
+
+	m := message{PublicKey: key.Encode()}
+
+	j, err := json.Marshal(&m)
+
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := f.client.Post(url, "application/json", bytes.NewReader(j))
+
+	if err != nil {
+		return nil, err
+	}
+
+	defer resp.Body.Close()
+
+	js, err := ioutil.ReadAll(resp.Body)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New("Please contact support to ensure that your device is enroled")
+	}
+
+	var wg WireGuard
+
+	err = json.Unmarshal(js, &wg)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &wg, nil
+}
+
+func (f *APIClient) Config() (*WireGuard, error) {
+
+	url := "https://" + f.domain + "/" + CONFIG
+
+	resp, err := f.client.Get(url)
+
+	if err != nil {
+		return nil, err
+	}
+
+	defer resp.Body.Close()
+
+	js, err := ioutil.ReadAll(resp.Body)
+
+	if err != err {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New("resp.StatusCode != http.StatusOK")
+	}
+
+	var wg WireGuard
+
+	err = json.Unmarshal(js, &wg)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &wg, nil
+}
+
+type VPNClient struct {
+	C       chan bool
+	api     *APIClient
+	key     Private
+	peer    string
+	state   bool
+	cancel  context.CancelFunc
+	mutex   sync.Mutex
+	connect sync.Mutex
+}
+
+func (f *APIClient) status() (bool, error) {
+	url := "https://" + f.domain + "/" + STATUS
+	res, err := f.client.Get(url)
+
+	if err != nil {
+		return false, err
+	}
+
+	defer res.Body.Close()
+
+	if res.StatusCode != 200 {
+		return false, err
+	}
+
+	type baz struct {
+		Public_key    string `json:"public_key"`
+		User          string `json:"user"`
+		Authenticated bool   `json:"authenticated"`
+		Ipv4_address  string `json:"ipv4_address"`
+		Device        string `json:"device"`
+	}
+
+	js, err := ioutil.ReadAll(res.Body)
+
+	if err != nil {
+		return false, err
+	}
+
+	var b baz
+
+	err = json.Unmarshal(js, &b)
+
+	if err != nil {
+		return false, err
+	}
+
+	return b.Authenticated, nil
+}
+
+func (a *APIClient) BaseUrl() string {
+	return "https://" + a.domain
+}
+
+func (a *APIClient) LoginUrl() string {
+	return "https://" + a.domain + "/" + ACTIVE
+}
+
+func (f *APIClient) beacon() (bool, error) {
+	url := "https://" + f.domain + "/" + BEACON
+	res, err := f.client.Get(url)
+
+	if err != nil {
+		return false, err
+	}
+
+	defer res.Body.Close()
+
+	if res.StatusCode != 200 {
+		return false, err
+	}
+
+	type baz struct {
+		Beacon bool `json:"beacon"`
+	}
+
+	js, err := ioutil.ReadAll(res.Body)
+
+	if err != nil {
+		return false, err
+	}
+
+	var b baz
+
+	err = json.Unmarshal(js, &b)
+
+	if err != nil {
+		return false, err
+	}
+
+	return b.Beacon, nil
+}
+
+func (b *VPNClient) event() {
+	select {
+	case b.C <- true:
+	default:
+	}
+}
+
+func NewVPNClient(api *APIClient, key Private, peer string) (*VPNClient, error) {
+	v := &VPNClient{api: api, key: key, peer: peer, C: make(chan bool)}
+	//go v.bg()
+	return v, nil
+}
+
+func (b *VPNClient) State() bool {
+	return b.state
+}
+
+func (b *VPNClient) Disconnect() error {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	if b.cancel == nil {
+		return errors.New("Not connected")
+	}
+
+	b.cancel()
+	b.cancel = nil
+	return nil
+}
+
+func (b *VPNClient) Connect() error {
+
+	if !b.connect.TryLock() {
+		return errors.New("Busy")
+	}
+
+	b.state = true
+
+	wg, err := b.api.Config()
+
+	if err != nil {
+		return err
+	}
+
+	if wg.Interface.PublicKey == "" {
+		b.state = false
+		b.connect.Unlock()
+		return errors.New("Key on server has not been configured yet - please contact support")
+	}
+
+	if wg.Peer.PublicKey != b.peer || wg.Interface.PublicKey != b.key.Public().Encode() {
+		b.state = false
+		b.connect.Unlock()
+		return errors.New("Key on server does not match - please contact support")
+	}
+
+	wg.Interface.PrivateKey = b.key
+
+	js, err := json.MarshalIndent(wg, "", "  ")
+
+	if err != nil {
+		b.state = false
+		b.connect.Unlock()
+		return err
+	}
+
+	ctx, cancel := context.WithCancel(context.TODO()) // I don't really understand contexts 😬
+
+	req, err := http.NewRequestWithContext(ctx, "POST", VPNURL, bytes.NewBuffer(js))
+
+	if err != nil {
+		b.state = false
+		b.connect.Unlock()
+		return err
+	}
+
+	b.cancel = cancel
+
+	req.Header.Add("Content-Type", "application/json")
+
+	res, err := CLIENT.Do(req)
+	if err != nil {
+		b.state = false
+		b.connect.Unlock()
+		return err
+	}
+
+	if res.StatusCode != 200 {
+		b.state = false
+		b.connect.Unlock()
+		res.Body.Close()
+		return errors.New("Not 200")
+	}
+
+	b.event()
+
+	go func() {
+		defer res.Body.Close()
+		defer b.connect.Unlock()
+
+		//ioutil.ReadAll(res.Body)
+		scanner := bufio.NewScanner(res.Body)
+		for scanner.Scan() {
+			//fmt.Println(scanner.Text())
+		}
+
+		b.mutex.Lock()
+		defer b.mutex.Unlock()
+
+		b.state = false
+		b.cancel = nil
+
+		b.event()
+	}()
+
+	return nil
+}
+
+func app2(name, domain, rootca, file string) {
+
+	icon := I_SLEEPING
+	title := name + icon
+
+	menuet.App().SetMenuState(&menuet.MenuState{Title: title})
+	menuet.App().MenuChanged()
+
+	alert := menuet.Alert{Buttons: []string{"OK"}}
+
+	var api *APIClient
+	var err error
+
+	if file != "" {
+		api, err = APIClientFromFile(name, domain, file)
+	} else {
+		api, err = APIClientFromKeychain(name, domain, rootca)
+	}
+
+	if err != nil {
+		alert.MessageText = "Couldn't obtain client certificate"
+		alert.InformativeText = err.Error()
+		menuet.App().Alert(alert)
+		log.Fatal(err)
+	}
+
+	menuet.App().Children = func() []menuet.MenuItem {
+		var items []menuet.MenuItem
+
+		status := "foo"
+		help := "bar"
+		link := api.BaseUrl()
+
+		items = append(items, menuet.MenuItem{
+			Type: menuet.Regular,
+			Text: "Status: " + status + " (" + help + ")",
+			Clicked: func() {
+				exec.Command("/usr/bin/open", link).Output()
+			},
 		})
-		log.Fatal(keypeer)
+
+		return items
 	}
 
-	priv := kp[0]
-	peer := kp[1]
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
 
-	key, ok := decode(priv)
+	for {
+		select {
+		case <-ticker.C:
+		}
 
-	if !ok {
-		alert := menuet.Alert{Buttons: []string{"OK"}}
-		alert.MessageText = "Corrupt encryption key"
-		alert.InformativeText = "Delete the keychain " + SERVICE + " entry for " + account + " and try again"
+		auth, _ := api.status()
+		conn, _ := api.beacon()
+
+		icon = I_CROSS_MARK
+
+		if auth && conn {
+			icon = I_TICK
+		}
+
+		title = name + icon
+
+		menuet.App().SetMenuState(&menuet.MenuState{Title: title})
+		menuet.App().MenuChanged()
+
+	}
+}
+
+func app(name, domain, rootca, file string) {
+
+	icon := I_SLEEPING
+	title := name + icon
+
+	menuet.App().SetMenuState(&menuet.MenuState{Title: title})
+	menuet.App().MenuChanged()
+
+	alert := menuet.Alert{Buttons: []string{"OK"}}
+
+	var api *APIClient
+	var err error
+
+	if file != "" {
+		api, err = APIClientFromFile(name, domain, file)
+	} else {
+		api, err = APIClientFromKeychain(name, domain, rootca)
+	}
+
+	if err != nil {
+		alert.MessageText = "Couldn't obtain client certificate"
+		alert.InformativeText = err.Error()
+		menuet.App().Alert(alert)
 		log.Fatal(err)
 	}
 
-	_, ok = decode(peer)
+	pri, peer, err := api.RetrieveKeys()
 
-	if !ok {
-		alert := menuet.Alert{Buttons: []string{"OK"}}
-		alert.MessageText = "Corrupt encryption key"
-		alert.InformativeText = "Server's key is corrupt"
+	if err == keyring.ErrNotFound {
+
+		key, err := genkey()
+
+		if *fallback != "" {
+			err = key.Decode(*fallback)
+		}
+
+		if err != nil {
+			alert.MessageText = "Couldn't generate key"
+			alert.InformativeText = err.Error()
+			menuet.App().Alert(alert)
+			log.Fatal(err)
+		}
+
+		wg, err := api.Upload(key.Public())
+
+		if err != nil {
+			alert.MessageText = "Couldn't register with service"
+			alert.InformativeText = err.Error()
+			menuet.App().Alert(alert)
+			log.Fatal(err)
+		}
+
+		if wg.Interface.PublicKey != key.Public().Encode() {
+			alert.MessageText = "Key generation problem"
+			alert.InformativeText = "An existing key is already present on the server - please contact support"
+			menuet.App().Alert(alert)
+			log.Fatal("Key mismatch")
+		}
+
+		err = api.StoreKeys(key, wg.Peer.PublicKey)
+
+		if err != nil {
+			alert.MessageText = "Couldn't store new key"
+			alert.InformativeText = err.Error()
+			menuet.App().Alert(alert)
+			log.Fatal(err)
+		}
+
+		pri = key
+		peer = wg.Peer.PublicKey
+
+		alert.MessageText = "Successfully registered with service"
+		alert.InformativeText = "You may need to contact support for them to approve your registration before using the VPN"
+		menuet.App().Alert(alert)
+
+	} else if err != nil {
+		if err != nil {
+			alert.MessageText = "Couldn't retrieve key"
+			alert.InformativeText = err.Error()
+			menuet.App().Alert(alert)
+			log.Fatal(err)
+		}
+	}
+
+	vpn, err := NewVPNClient(api, pri, peer)
+
+	if err != nil {
+		alert.MessageText = "Couldn't get a vpn client"
+		alert.InformativeText = err.Error()
+		menuet.App().Alert(alert)
 		log.Fatal(err)
 	}
 
-	pub := encode(pubkey(key))
+	menuet.App().Children = func() []menuet.MenuItem {
+		var items []menuet.MenuItem
 
-	fmt.Println("PUBKEY", pub)
-	fmt.Println("SERVER", peer)
+		active := vpn.State()
 
-	frontend(client, peer, key, true)
+		legend := "Activate"
+		status := "Inactive"
+		link := api.BaseUrl()
+		help := "click to open portal️"
+
+		if active {
+			legend = "Deactivate"
+			status = "Active"
+		}
+
+		if !api.auth {
+			link = api.LoginUrl()
+			help = "click to login to portal️"
+			status += "/Unauthenticated"
+		}
+
+		if api.auth || active {
+			items = append(items, menuet.MenuItem{
+				Type:  menuet.Regular,
+				Text:  legend,
+				State: active,
+				Clicked: func() {
+
+					var err error
+
+					if active {
+						err = vpn.Disconnect()
+					} else {
+						err = vpn.Connect()
+					}
+
+					if err != nil {
+						alert.MessageText = "Oops"
+						alert.InformativeText = err.Error()
+						menuet.App().Alert(alert)
+					}
+				},
+			})
+
+			items = append(items, menuet.MenuItem{Type: menuet.Separator})
+		}
+
+		items = append(items, menuet.MenuItem{
+			Type: menuet.Regular,
+			Text: "Status: " + status + " (" + help + ")",
+			Clicked: func() {
+				exec.Command("/usr/bin/open", link).Output()
+			},
+		})
+
+		items = append(items, menuet.MenuItem{
+			Type: menuet.Regular,
+			Text: "Show keys",
+			Clicked: func() {
+				alert := menuet.Alert{Buttons: []string{"OK", "Private key"}}
+				alert.MessageText = "Public Keys"
+				alert.InformativeText = "Public key: " + pri.Public().Encode() + "\nServer key: " + peer
+				ret := menuet.App().Alert(alert)
+
+				if ret.Button == 1 {
+					alert := menuet.Alert{Buttons: []string{"OK"}}
+					alert.MessageText = "Private key"
+					alert.InformativeText = pri.Encode()
+					menuet.App().Alert(alert)
+				}
+
+				return
+			},
+		})
+
+		return items
+	}
+
+	for {
+		select {
+		case <-api.C:
+		case <-vpn.C:
+		}
+
+		icon = I_SOS
+
+		if vpn.State() {
+
+			switch api.state {
+			case V_NOT_AUTHENTICATED:
+				icon = I_WARNING
+			case V_AUTHENTICATED:
+				icon = I_PROHIBITED
+			case V_REACHABLE:
+				icon = I_TICK
+			}
+
+		} else {
+
+			switch api.state {
+			case V_NOT_AUTHENTICATED:
+				icon = I_PASSPORT
+			case V_AUTHENTICATED:
+				icon = I_DOWN_ARROW
+			case V_REACHABLE:
+				icon = I_TICK
+			}
+		}
+
+		title = name + icon
+
+		menuet.App().SetMenuState(&menuet.MenuState{Title: title})
+		menuet.App().MenuChanged()
+
+	}
 }
 
 func tsf(x uint64) string {
@@ -280,352 +898,6 @@ func tsf(x uint64) string {
 	}
 
 	return fmt.Sprintf("%.2f%s", n, suffix[0])
-}
-
-func frontend(client *http.Client, peer string, key Private, full bool) {
-	var up bool
-	pub := encode(pubkey(key))
-
-	var rx, tx uint64
-	var rxps, txps uint64
-
-	update := make(chan bool)
-
-	icon := I_INITIALISING
-	text := "Initialising"
-	link := PORTAL
-
-	menuet.App().SetMenuState(&menuet.MenuState{
-		Title: NAME + icon,
-	})
-
-	menuitems := func() []menuet.MenuItem {
-		var items []menuet.MenuItem
-
-		items = append(items, menuet.MenuItem{
-			Type: "Status",
-			Text: text + " (open portal)",
-			Clicked: func() {
-				exec.Command("/usr/bin/open", link).Output()
-			},
-		})
-
-		if full {
-
-			//items = append(items, menuet.MenuItem{Type: menuet.Separator})
-
-			label := DOMAIN
-
-			if up {
-				label = fmt.Sprintf(DOMAIN+" Tx %sB/s, Rx %sB/s", tsf(txps), tsf(rxps))
-			}
-
-			items = append(items, menuet.MenuItem{
-				Type: "Status",
-				//Text:  "Enable",
-				Text:  label,
-				State: up,
-				Clicked: func() {
-
-					if up {
-						disconnect()
-						update <- true
-						update <- true
-					} else {
-
-						wg := getconfig(client, PORTAL+CONFIG, pub)
-
-						if wg == nil {
-							alert := menuet.Alert{Buttons: []string{"OK"}}
-							alert.MessageText = "Connection failed"
-							alert.InformativeText = "Couldn't retrieve config from server"
-							menuet.App().Alert(alert)
-							return
-						}
-
-						if wg.Peer.PublicKey != peer {
-							alert := menuet.Alert{Buttons: []string{"OK"}}
-							alert.MessageText = "Server key has changed"
-							alert.InformativeText = "The key that the server uses has changed.\nPlease contact support."
-							menuet.App().Alert(alert)
-							return
-						}
-
-						if wg.Interface.PublicKey != pub {
-							alert := menuet.Alert{Buttons: []string{"OK"}}
-							alert.MessageText = "Mismatched Key"
-							alert.InformativeText = "Please let support know that your key has changed to: " + pub
-							menuet.App().Alert(alert)
-							return
-						}
-
-						wg.Interface.PrivateKey = key
-
-						icon = I_CONNECTING
-						menuet.App().SetMenuState(&menuet.MenuState{Title: NAME + icon})
-
-						err := connect(*wg)
-
-						update <- true
-						update <- true
-
-						if err != nil {
-							alert := menuet.Alert{Buttons: []string{"OK"}}
-							alert.MessageText = "Couldn't start WireGuard session"
-							alert.InformativeText = fmt.Sprint("Error: ", err)
-							menuet.App().Alert(alert)
-							return
-						}
-					}
-				},
-			})
-
-			//items = append(items, menuet.MenuItem{Type: menuet.Separator})
-
-			items = append(items, menuet.MenuItem{
-				Type: "Keys",
-				Text: "Show keys",
-				Clicked: func() {
-					alert := menuet.Alert{Buttons: []string{"OK", "Private key"}}
-					alert.MessageText = "Public Keys"
-					alert.InformativeText = "Public key: " + pub + "\nServer key: " + peer
-					ret := menuet.App().Alert(alert)
-
-					if ret.Button == 1 {
-						alert := menuet.Alert{Buttons: []string{"OK"}}
-						alert.MessageText = "Private key"
-						alert.InformativeText = encode(key)
-						menuet.App().Alert(alert)
-					}
-
-					return
-				},
-			})
-
-		}
-		return items
-	}
-
-	menuet.App().Children = menuitems
-
-	ticker := time.NewTicker(5 * time.Second)
-
-	defer ticker.Stop()
-
-	var ts int64
-
-	for {
-
-		rxt, txt := stats()
-		tst := time.Now().Unix()
-
-		if ts > 0 {
-			d := tst - ts
-
-			if d > 0 {
-				txps = (txt - tx) / uint64(d)
-				rxps = (rxt - rx) / uint64(d)
-			}
-		}
-		ts = tst
-		rx = rxt
-		tx = txt
-
-		menuet.App().MenuChanged()
-
-		l := link
-		i := icon
-		t := text
-		u := up
-
-		var x uint8
-
-		if pub != "" {
-			u = (state() == nil)
-		}
-
-		_, err := get200(client, PORTAL+BEACON)
-		//b, _ := get(client, PORTAL+BEACON, "beacon")
-		//fmt.Println("BEACON:", err)
-		if err == nil {
-			x |= 0x2
-		}
-
-		a, e := get(client, PORTAL+STATUS, "authenticated")
-		//fmt.Println("ACTIVE:", e)
-		if a {
-			x |= 0x1
-		}
-
-		//log.Println("beacon", b)
-
-		t = "Disabled"
-		l = PORTAL
-		i = I_DOWN
-
-		if u || !full {
-			switch x {
-			case 3:
-				i = I_ESTABLISHED
-				t = "Established"
-			case 2: // wg up but not auth
-				i = I_WARNING
-				t = "Authentication required"
-				l = PORTAL + ACTIVE
-			case 1: // auth but no wg
-				i = I_BLOCKED
-				t = "Traffic blocked"
-			default:
-				i = I_BROKEN
-				t = "Broken"
-			}
-		}
-
-		if e != nil {
-			i = I_UNREACHABLE
-			t = "Unreachable"
-		}
-
-		menuet.App().SetMenuState(&menuet.MenuState{
-			Title: NAME + icon,
-		})
-
-		menuet.App().MenuChanged()
-
-		if l != link || i != icon || t != text || u != up {
-			link = l
-			icon = i
-			text = t
-			up = u
-			menuet.App().MenuChanged()
-		}
-
-		select {
-		case <-ticker.C:
-		case <-update:
-		}
-	}
-
-}
-
-func stats() (rx, tx uint64) {
-
-	resp, err := CLIENT.Get(BASEURL + "stats")
-
-	if err != nil {
-		return
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return
-	}
-
-	b, err := ioutil.ReadAll(resp.Body)
-
-	if err != nil {
-		return
-	}
-
-	lines := strings.Split(string(b), "\n")
-
-	re := regexp.MustCompile(`^\S{44}\s+(\d+)\s+(\d+)`)
-
-	for _, v := range lines {
-		m := re.FindStringSubmatch(v)
-
-		if len(m) == 3 {
-			rx, _ = strconv.ParseUint(m[1], 10, 64)
-			tx, _ = strconv.ParseUint(m[2], 10, 64)
-			return rx, tx
-		}
-
-	}
-	return
-}
-
-func state() error {
-
-	resp, err := CLIENT.Get(BASEURL + "state")
-
-	if err != nil {
-		return err
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		resp.Body.Close()
-		return errors.New("StatusCode != 200")
-	}
-
-	return nil
-}
-
-func fetch(client *http.Client, url string) error {
-
-	resp, err := client.Get(url)
-
-	if err != nil {
-		return err
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		resp.Body.Close()
-		return errors.New("StatusCode != 200")
-	}
-
-	return nil
-}
-
-func disconnect() error {
-
-	resp, err := CLIENT.Get(BASEURL + "down")
-
-	if err != nil {
-		return err
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		resp.Body.Close()
-		return errors.New("StatusCode != 200")
-	}
-
-	return nil
-}
-
-func connect(wg WireGuard) error {
-
-	js, err := json.MarshalIndent(&wg, "", "  ")
-
-	if err != nil {
-		return err
-	}
-
-	resp, err := CLIENT.Post(BASEURL+"up", "application/json", bytes.NewBuffer(js))
-
-	if err != nil {
-		return err
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		resp.Body.Close()
-		return errors.New("StatusCode != 200")
-	}
-
-	//b, err := ioutil.ReadAll(resp.Body)
-	//if err != nil {
-	//	log.Println(err)
-	//}
-
-	return nil
 }
 
 func getclient(sn string) (*http.Client, string, error) {
@@ -701,21 +973,12 @@ func identity(cn string) (certstore.Identity, string, error) {
 	return nil, "", errors.New("Couldn't find my identity")
 }
 
-func retrievekey(service, account string) (string, error) {
-	// get password
-	secret, err := keyring.Get(service, account)
-	if err != nil {
-		return "", err
-	}
-	return secret, nil
-}
-
 func storekey(service, account, password string) error {
 	// set password
 	return keyring.Set(service, account, password)
 }
 
-func genkey() ([32]byte, error) {
+func genkey() (Private, error) {
 	var key [32]byte
 
 	n, err := rand.Read(key[:])
@@ -737,252 +1000,31 @@ func genkey() ([32]byte, error) {
 	return key, nil
 }
 
-func pubkey(private [32]byte) [32]byte {
-
-	var public [32]byte
-
-	curve25519.ScalarBaseMult(&public, &private)
-
-	var foo [32]byte
-
-	x, err := curve25519.X25519(private[:], curve25519.Basepoint)
-
-	if err != nil || len(x) != 32 {
-		log.Fatal(err, len(x))
-	}
-
-	copy(foo[:], x[:])
-
-	if foo != public {
-		log.Fatal(foo, public)
-	}
-
-	return public
-}
-
-func encode(key [32]byte) string {
-	return base64.StdEncoding.EncodeToString(key[:])
-}
-
-func decode(s string) (key [32]byte, b bool) {
-	if k, err := base64.StdEncoding.DecodeString(s); err == nil && len(k) == 32 {
-		copy(key[:], k[:])
-		b = true
-	}
-	return
-}
-
-func decode_(s string) ([32]byte, error) {
-	var key [32]byte
-
-	k, err := base64.StdEncoding.DecodeString(s)
-
-	if err != nil {
-		return key, err
-	}
-
-	if len(k) != 32 {
-		return key, errors.New("Incorrect key length")
-	}
-
-	copy(key[:], k[:])
-
-	return key, nil
-}
-
-func _getconfig(client *http.Client, url string, pub string) *WireGuard {
-
-	/*
-		type message struct {
-			PublicKey string
-		}
-
-		m := message{PublicKey: pub}
-		j, err := json.Marshal(&m)
-
-		fmt.Println(url, string(j))
-
-		resp, err := client.Post(url, "application/json", bytes.NewReader(j))
-	*/
-
-	resp, err := client.Get(url)
-
-	fmt.Println(err)
-
-	if err != nil {
-		return nil
-	}
-
-	defer resp.Body.Close()
-
-	js, err := ioutil.ReadAll(resp.Body)
-
-	if err != nil {
-		return nil
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil
-	}
-
-	var wg WireGuard
-
-	err = json.Unmarshal(js, &wg)
-
-	if err != nil {
-		return nil
-	}
-
-	return &wg
-}
-
-func getconfig(client *http.Client, url string, pub string) *WireGuard {
-
-	type message struct {
-		PublicKey string
-	}
-
-	m := message{PublicKey: pub}
-	j, err := json.Marshal(&m)
-
-	fmt.Println(url, string(j))
-
-	resp, err := client.Post(url, "application/json", bytes.NewReader(j))
-
-	fmt.Println(err)
-
-	if err != nil {
-		return nil
-	}
-
-	defer resp.Body.Close()
-
-	js, err := ioutil.ReadAll(resp.Body)
-
-	if err != nil {
-		return nil
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil
-	}
-
-	var wg WireGuard
-
-	err = json.Unmarshal(js, &wg)
-
-	if err != nil {
-		return nil
-	}
-
-	return &wg
-}
-
-func cert(pem string) (*http.Client, string, error) {
-
-	var account string
-
-	// load cert
-	cert, err := tls.LoadX509KeyPair(pem, pem)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Setup HTTPS client
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		//RootCAs:      caCertPool,
-	}
-
-	tlsConfig.BuildNameToCertificate()
-
-	for k, _ := range tlsConfig.NameToCertificate {
-		account = k
-	}
-
-	if account == "" {
-		return nil, account, nil
-	}
-
-	transport := &http.Transport{
-		TLSClientConfig:     tlsConfig,
-		TLSHandshakeTimeout: 1 * time.Second,
-	}
-
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   2 * time.Second,
-	}
-
-	return client, account, nil
-}
-
-func get(client *http.Client, url, param string) (bool, error) {
-	resp, err := client.Get(url)
-
-	if err != nil {
-		return false, err
-	}
-
-	defer resp.Body.Close()
-
-	js, err := ioutil.ReadAll(resp.Body)
-
-	if err != nil {
-		return false, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return false, nil
-	}
-
-	var cf map[string]interface{}
-
-	err = json.Unmarshal(js, &cf)
-
-	if err != nil {
-		return false, nil
-	}
-
-	//log.Println("****", cf)
-
-	if v, ok := cf[param]; ok {
-		if b, ok := v.(bool); ok {
-			return b, nil
-		}
-	}
-	return false, nil
-	//return cf[param], nil
-}
-
-func get200(client *http.Client, url string) ([]byte, error) {
-
-	resp, err := client.Get(url)
-
-	if err != nil {
-		fmt.Println(err)
-		return nil, err
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, errors.New("Status code not 200")
-	}
-
-	body, err := ioutil.ReadAll(resp.Body)
-
-	if err != nil {
-		return nil, err
-	}
-
-	return body, nil
-}
-
 /**********************************************************************/
 
+func setconf(wg WireGuard) string {
+	conf := []string{"[Interface]"}
+	conf = append(conf, "PrivateKey = "+wg.Interface.PrivateKey.Encode())
+	conf = append(conf, "[Peer]")
+	conf = append(conf, "PublicKey = "+wg.Peer.PublicKey)
+	conf = append(conf, "Endpoint = "+wg.Peer.Endpoint)
+	conf = append(conf, "AllowedIPs = "+strings.Join(wg.Peer.AllowedIPs, ","))
+	conf = append(conf, "")
+	return strings.Join(conf, "\n")
+}
+
+type req struct {
+	wg      WireGuard
+	control bool
+	success bool
+	handled chan bool
+	monitor chan bool
+	exited  chan bool
+}
+
 func wgtool() {
+
+	var mutex sync.Mutex
 
 	exec.Command("networksetup", "-setdnsservers", "Wi-Fi", "empty").Output()
 	exec.Command("/bin/sh", "-c", "cd "+DIRECTORY+" && rm utun?.sock wg?.name").Output()
@@ -996,137 +1038,136 @@ func wgtool() {
 	}
 
 	exec.Command("chown", "root:staff", SOCKET).Output()
-	exec.Command("chmod", "g+rw", SOCKET).Output()
-
-	var utun string
-	var mu1, mu2 sync.Mutex
-
-	var quit chan bool
-
-	http.HandleFunc("/down", func(w http.ResponseWriter, r *http.Request) {
-		mu2.Lock()
-		if quit != nil {
-			close(quit)
-			quit = nil
-		}
-		mu2.Unlock()
-	})
-
-	http.HandleFunc("/state", func(w http.ResponseWriter, r *http.Request) {
-		mu2.Lock()
-		defer mu2.Unlock()
-
-		if quit == nil {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-	})
-
-	http.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
-
-		mu2.Lock()
-		defer mu2.Unlock()
-
-		if quit == nil {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-
-		out, err := exec.Command("wg", "show", utun, "transfer").Output()
-
-		if err != nil {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write(out)
-	})
+	exec.Command("chmod", "660", SOCKET).Output()
 
 	http.HandleFunc("/up", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte("Hello, World!\n"))
 			return
 		}
 
-		defer r.Body.Close()
-
-		body, err := ioutil.ReadAll(r.Body)
-
-		if err != nil {
-			log.Println(err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
+		b, err := ioutil.ReadAll(r.Body)
 
 		var wg WireGuard
 
-		err = json.Unmarshal(body, &wg)
+		err = json.Unmarshal(b, &wg)
 
 		if err != nil {
-			log.Println(err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
-		fmt.Println(wg)
+		if wg.Peer.Endpoint == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 
-		if !mu1.TryLock() {
-			log.Println("mu1.TryLock")
+		if !mutex.TryLock() {
 			w.WriteHeader(http.StatusConflict)
 			return
 		}
 
-		var done chan bool
+		defer mutex.Unlock()
 
-		mu2.Lock()
-		defer mu2.Unlock()
+		f := &req{wg: wg, control: true, monitor: make(chan bool, 10), handled: make(chan bool), exited: make(chan bool)}
 
-		utun, quit, done = session(wg)
+		defer close(f.exited)
+
+		go tunnel(f)
+
+		<-f.handled
+
+		if !f.success {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
 
 		w.WriteHeader(http.StatusOK)
 
-		go func() {
-			defer func() {
-				mu2.Lock()
-				quit = nil
-				mu2.Unlock()
-				mu1.Unlock()
-			}()
-
-			if done == nil {
+		for {
+			select {
+			case <-r.Context().Done():
 				return
-			}
-			<-done
-			exec.Command("networksetup", "-setdnsservers", "Wi-Fi", "empty").Output()
-		}()
+			case b, ok := <-f.monitor:
+				if !ok {
+					return
+				}
 
+				_, err := w.Write([]byte(fmt.Sprintln(b)))
+
+				if err != nil {
+					return
+				}
+
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+
+			}
+		}
+	})
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
 	})
 
 	server := http.Server{}
-
 	log.Fatal(server.Serve(s))
 }
 
-func session(wg WireGuard) (string, chan bool, chan bool) {
+func tunnel(f *req) {
+	ticker := time.NewTicker(3 * time.Second)
+	defer func() {
+		ticker.Stop()
+		close(f.monitor)
+	}()
 
-	quit := make(chan bool)
+	dev, done := session(f.wg, f.exited)
 
-	utun, done := wireguard(quit)
-
-	if utun == "" {
-		return "", nil, nil
+	if dev == "" {
+		fmt.Println("failed")
+		close(f.handled)
+		return
 	}
 
-	mtu := fmt.Sprint(wg.Interface.MTU)
+	f.success = true
+	close(f.handled)
+
+	defer func() {
+		exec.Command("networksetup", "-setdnsservers", "Wi-Fi", "empty").Output()
+	}()
+
+	fmt.Println(dev, done)
+
+	for {
+		select {
+		case <-ticker.C:
+			select {
+			case f.monitor <- true:
+			default:
+				return
+			}
+		case <-done:
+			fmt.Println("down")
+			return
+		}
+	}
+}
+
+func session(wg WireGuard, quit chan bool) (string, chan bool) {
+
+	utun, done := wireguard_go(quit)
+
+	if utun == "" {
+		return "", nil
+	}
+
 	exec.Command("ifconfig", utun, "inet", wg.Interface.Address+"/32", wg.Interface.Address, "alias").Output()
-	exec.Command("ifconfig", utun, "mtu", mtu).Output()
+	exec.Command("ifconfig", utun, "mtu", fmt.Sprint(wg.Interface.MTU)).Output()
 	exec.Command("ifconfig", utun, "up").Output()
 
 	for _, route := range wg.Peer.AllowedIPs {
-		//fmt.Println(route)
+		fmt.Println(">>>>", route)
 		exec.Command("route", "-q", "-n", "add", "-inet", route, "-interface", utun).Output()
 	}
 
@@ -1152,32 +1193,19 @@ func session(wg WireGuard) (string, chan bool, chan bool) {
 
 	networksetup := []string{"-setdnsservers", "Wi-Fi"}
 	networksetup = append(networksetup, wg.Interface.DNS[:]...)
-	log.Println(networksetup)
+	log.Println(">>>>>", networksetup)
 	exec.Command("networksetup", networksetup[:]...).Output()
 
 	err = cmd.Wait()
-
-	//exec.Command("networksetup", "-setdnsservers", "Wi-Fi", "empty").Output()
 
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	return utun, quit, done
+	return utun, done
 }
 
-func setconf(wg WireGuard) string {
-	conf := []string{"[Interface]"}
-	conf = append(conf, "PrivateKey = "+encode(wg.Interface.PrivateKey))
-	conf = append(conf, "[Peer]")
-	conf = append(conf, "PublicKey = "+wg.Peer.PublicKey)
-	conf = append(conf, "Endpoint = "+wg.Peer.Endpoint)
-	conf = append(conf, "AllowedIPs = "+strings.Join(wg.Peer.AllowedIPs, ","))
-	conf = append(conf, "")
-	return strings.Join(conf, "\n")
-}
-
-func wireguard(quit chan bool) (string, chan bool) {
+func wireguard_go(quit chan bool) (string, chan bool) {
 
 	name := DIRECTORY + "/gpnc.name"
 	done := make(chan bool)
