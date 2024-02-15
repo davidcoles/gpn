@@ -82,7 +82,7 @@ const (
 var monitor = flag.Bool("m", false, "monitor vpn status (for use with woreguard app)")
 var manage = flag.Bool("w", false, "manage wireguard device (to be run with sudo)")
 var name = flag.String("n", NAME, "app name")
-var rootca = flag.String("r", ROOTCA, "cn of the root ca so search for")
+var rootca = flag.String("r", ROOTCA, "cn of the root ca to search for")
 var domain = flag.String("d", DOMAIN, "domain name")
 var certfile = flag.String("c", "", "client certfile pem file")
 var fallback = flag.String("f", "", "fallback private key")
@@ -1115,6 +1115,7 @@ func wgtool() {
 	log.Fatal(server.Serve(s))
 }
 
+// this is not really necessary - hangover from old code
 func tunnel(f *req) {
 	ticker := time.NewTicker(3 * time.Second)
 	defer func() {
@@ -1191,10 +1192,11 @@ func session(wg WireGuard, quit chan bool) (string, chan bool) {
 
 	stdin.Close()
 
-	networksetup := []string{"-setdnsservers", "Wi-Fi"}
+	networksetup := []string{"networksetup", "-setdnsservers", "Wi-Fi"}
 	networksetup = append(networksetup, wg.Interface.DNS[:]...)
 	log.Println(">>>>>", networksetup)
-	exec.Command("networksetup", networksetup[:]...).Output()
+	//exec.Command("networksetup", networksetup[:]...).Output()
+	exec.Command(networksetup[0], networksetup[1:]...).Output()
 
 	err = cmd.Wait()
 
@@ -1240,11 +1242,13 @@ again:
 	sock := DIRECTORY + "/" + utun + ".sock"
 
 	go func() {
-		select {
-		case <-done:
-		case <-quit:
-			os.Remove(sock)
-		}
+		//select {
+		//case <-done:
+		//case <-quit:
+		//	os.Remove(sock)
+		//}
+		<-quit
+		os.Remove(sock)
 	}()
 
 	return utun, done

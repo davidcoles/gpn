@@ -20,7 +20,9 @@ Two processes need to be run.
 
 * A WireGuard management process (needs root): `sudo ./gpnc -w`
 * A menu bar based client process: `./gpnc`
-* Alternately if you want to use the regular WireGuard app for establishing the VPN then you can run `./gpnc -m` to monitor it in the menu bar.
+* Alternately if you want to use the regular WireGuard app for
+  establishing the VPN then you can run `./gpnc -m` to monitor it in
+  the menu bar.
 
 You will need a TLS client certificate in your keychain (or specify a
 PEM format certificate file with the -c flag) and grant access to the
@@ -88,8 +90,8 @@ Returns:
   "Address": "10.1.2.3",
   "MTU": 1400,
   "DNS": [
-   "8.8.8.8",
-   "1.1.1.1"
+   "10.0.1.53",
+   "10.0.2.53"
   ]
  },
  "Peer": {
@@ -110,19 +112,21 @@ This is a PoC. The intention would be to build a first-class macOS
 implementation in Swift with appropriate entitlements. Alas, I am not
 an Apple developer.
 
-A native client would need/implement:
+A native client should need/implement:
 
 * WireGuardKit / NEPacketTunnelProvider integration - Network Extensions Entitlement
 * Keychain access for certificate/private key
-* Access the simple API via HTTP with client cert
-* Ability to launch browser window for AD auth, etc.
+* Access the simple API via HTTPS with client cert (mTLS)
+* Ability to launch browser window for AD auth, etc. (or maybe a webview with mTLS preconfigured?)
 * A Simple UI - status menu item, dropdown options
 * Generate private key on first use and save along with server public key
 * Check server key against stored entry when connecting - alert user of mismatch
 * Post pubkey when connecting to generate notification server side in case of mismatch
+* Only use VPN DNS resolvers for internal domains (matchDomains in NEDNSSettings?)
 
 ## NOTES
 
-https://developer.apple.com/documentation/networkextension/nednssettings
-https://developer.apple.com/documentation/networkextension/netunnelnetworksettings
-https://stackoverflow.com/questions/5677810/how-to-connect-with-client-certificate-using-a-webview-in-cocoa
+* https://developer.apple.com/documentation/networkextension/nepackettunnelprovider
+* https://developer.apple.com/documentation/networkextension/nednssettings
+* https://developer.apple.com/documentation/networkextension/netunnelnetworksettings
+* https://stackoverflow.com/questions/5677810/how-to-connect-with-client-certificate-using-a-webview-in-cocoa
