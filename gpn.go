@@ -445,11 +445,13 @@ func main() {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 
-		if r.Host != "" {
-			http.Redirect(w, r, "https://"+r.Host, 302)
+		if config.Address != "" {
+			http.Redirect(w, r, "https://"+config.Address, 302)
 			return
 		}
-		http.Redirect(w, r, "https://127.0.0.1", 302)
+
+		w.WriteHeader(http.StatusInternalServerError)
+		return
 	})
 
 	mux.HandleFunc("/beacon", func(w http.ResponseWriter, r *http.Request) {

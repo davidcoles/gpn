@@ -130,3 +130,18 @@ A native client should need/implement:
 * https://developer.apple.com/documentation/networkextension/nednssettings
 * https://developer.apple.com/documentation/networkextension/netunnelnetworksettings
 * https://stackoverflow.com/questions/5677810/how-to-connect-with-client-certificate-using-a-webview-in-cocoa
+
+## Troublesome networks
+
+Some networks don't support arbitrary high-port UDP traffic.
+
+* Easy to add additional translated ports on AWS
+* Add an option to advertise additional ports to client
+* Support a tranport over websockets
+
+## Websockets
+
+* Each server side websocket opens a UDP socket to WireGuard via loopback
+* On the client a UDP listener forwards packets from local wg
+* Maybe no need to wrap wg packets unless some keepalive is needed?
+
